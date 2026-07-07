@@ -63,6 +63,12 @@ func convert(path string) error {
 		return fmt.Errorf("move to trash: %w", err)
 	}
 
+	copyCmd := exec.Command("pbcopy")
+	copyCmd.Stdin = strings.NewReader(out)
+	if err := copyCmd.Run(); err != nil {
+		log.Printf("pbcopy: %v", err)
+	}
+
 	return nil
 }
 
