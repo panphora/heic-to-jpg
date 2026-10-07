@@ -95,17 +95,46 @@ func processExisting(dirs []string) {
 	}
 }
 
+const maxScreenshotAge = 10 * 24 * time.Hour
+
+func pruneOld(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		log.Printf("prune %s: %v", dir, err)
+		return
+	}
+	cutoff := time.Now().Add(-maxScreenshotAge)
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if err := moveToTrash(path); err != nil {
+			log.Printf("prune %s: %v", path, err)
+			continue
+		}
+		log.Printf("pruned %s", e.Name())
+	}
+}
+
 func main() {
 	home := os.Getenv("HOME")
+	screenshots := filepath.Join(home, "Screenshots")
 	dirs := []string{
 		filepath.Join(home, "Downloads"),
 		filepath.Join(home, "Desktop"),
+		screenshots,
 	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Printf("heic-to-jpg started, watching %v", dirs)
 
 	processExisting(dirs)
+	pruneOld(screenshots)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -122,6 +151,8 @@ func main() {
 	pending := make(map[string]time.Time)
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
+	pruneTick := time.NewTicker(time.Hour)
+	defer pruneTick.Stop()
 
 	for {
 		select {
@@ -137,6 +168,8 @@ func main() {
 				return
 			}
 			log.Printf("watch error: %v", err)
+		case <-pruneTick.C:
+			pruneOld(screenshots)
 		case <-tick.C:
 			now := time.Now()
 			for path, seen := range pending {
