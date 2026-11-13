@@ -95,46 +95,74 @@ func processExisting(dirs []string) {
 	}
 }
 
-const maxScreenshotAge = 10 * 24 * time.Hour
+const maxAge = 10 * 24 * time.Hour
 
-func pruneOld(dir string) {
+func newestModTime(path string, info os.FileInfo) time.Time {
+	newest := info.ModTime()
+	if !info.IsDir() {
+		return newest
+	}
+	filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+		return nil
+	})
+	return newest
+}
+
+func pruneOld(dir string, dryRun bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		log.Printf("prune %s: %v", dir, err)
 		return
 	}
-	cutoff := time.Now().Add(-maxScreenshotAge)
+	cutoff := time.Now().Add(-maxAge)
 	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil || info.ModTime().After(cutoff) {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		info, err := os.Lstat(path)
+		if err != nil || newestModTime(path, info).After(cutoff) {
+			continue
+		}
+		if dryRun {
+			fmt.Println(path)
+			continue
+		}
 		if err := moveToTrash(path); err != nil {
 			log.Printf("prune %s: %v", path, err)
 			continue
 		}
-		log.Printf("pruned %s", e.Name())
+		log.Printf("pruned %s", path)
 	}
 }
 
 func main() {
 	home := os.Getenv("HOME")
+	downloads := filepath.Join(home, "Downloads")
 	screenshots := filepath.Join(home, "Screenshots")
-	dirs := []string{
-		filepath.Join(home, "Downloads"),
-		filepath.Join(home, "Desktop"),
-		screenshots,
+	dirs := []string{downloads, filepath.Join(home, "Desktop"), screenshots}
+	pruned := []string{downloads, screenshots}
+
+	if len(os.Args) > 1 && os.Args[1] == "-n" {
+		for _, d := range pruned {
+			pruneOld(d, true)
+		}
+		return
 	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Printf("heic-to-jpg started, watching %v", dirs)
 
 	processExisting(dirs)
-	pruneOld(screenshots)
+	for _, d := range pruned {
+		pruneOld(d, false)
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -169,7 +197,9 @@ func main() {
 			}
 			log.Printf("watch error: %v", err)
 		case <-pruneTick.C:
-			pruneOld(screenshots)
+			for _, d := range pruned {
+				pruneOld(d, false)
+			}
 		case <-tick.C:
 			now := time.Now()
 			for path, seen := range pending {
